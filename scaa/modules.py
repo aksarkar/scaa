@@ -5,9 +5,8 @@ class Encoder(torch.nn.Module):
   """Encoder q(z | x) = N(mu(x), sigma^2(x))
 
   """
-  def __init__(self, input_dim, output_dim, stoch_samples=10):
+  def __init__(self, input_dim, output_dim):
     super().__init__()
-    self.stoch_samples = torch.Size([stoch_samples])
     self.net = torch.nn.Sequential(
       torch.nn.Linear(input_dim, 128),
       torch.nn.ReLU(),
@@ -19,10 +18,7 @@ class Encoder(torch.nn.Module):
 
   def forward(self, x):
     q = self.net(x)
-    mean = self.mean(q)
-    scale = self.scale(q)
-    qz = torch.distributions.Normal(mean, scale).rsample(self.stoch_samples)
-    return qz
+    return self.mean(q), self.scale(q)
 
 class ZIP(torch.nn.Module):
   """Decoder p(x | z) = pi(z) delta0(.) + (1 - pi(z)) Poisson(lambda(z))
@@ -49,25 +45,37 @@ class ZIPVAE(torch.nn.Module):
     self.encoder = Encoder(input_dim, latent_dim)
     self.decoder = ZIP(latent_dim, input_dim)
 
-  def fit(self, x, max_epochs, verbose=False, **kwargs):
+  def fit(self, x, max_epochs, verbose=False, stoch_samples=10, **kwargs):
     """Fit the model
 
     :param x: torch.utils.data.DataLoader
 
     """
+    stoch_samples = torch.Size([stoch_samples])
     opt = torch.optim.Adam(self.parameters(), **kwargs)
     for epoch in range(max_epochs):
       for i, batch in enumerate(x):
         opt.zero_grad()
+        mean, scale = self.encoder.forward(batch)
+        # [batch_size]
+        # Important: this is analytic
+        kl_term = torch.sum(scaa.loss.kl_term(mean, scale), dim=1)
         # [stoch_samples, batch_size, latent_dim]
-        qz = self.encoder.forward(batch)
+        qz = torch.distributions.Normal(mean, scale).rsample(stoch_samples)
         # [stoch_samples, batch_size, input_dim]
         logodds, mean = self.decoder.forward(qz)
-        loss = torch.sum(torch.mean(torch.sum(scaa.loss.zip_llik(batch, mean, logodds), dim=2) - torch.sum(scaa.loss.kl_term(qz), dim=2), dim=0))
+        error_term = torch.mean(torch.sum(scaa.loss.zip_llik(batch, mean, logodds), dim=2), dim=0)
+        # Important: optim minimizes
+        loss = -torch.sum(error_term - kl_term)
         loss.backward()
         opt.step()
-        if verbose:
-          print(f'{i} {loss}')
+        if verbose and not i % 10:
+          print(f'[epoch={epoch} batch={i}] error={torch.sum(error_term)} kl={torch.sum(kl_term)} elbo={-loss}')
+    return self
+
+  def denoise(self, x):
+    # Plug E[z | x] into the decoder
+    return torch.cat([self.decoder.forward(self.encoder.forward(batch)[0])[1] for batch in x]).detach().numpy()
 
 class BinaryDisciminator(torch.nn.Module):
   def __init__(self, input_dim):

@@ -6,9 +6,12 @@ from fixtures import *
 
 def test_kl(dims):
   n, p, d, stoch_samples = dims
-  qz = torch.tensor(np.random.normal(size=(stoch_samples, n, d)), dtype=torch.float)
-  res = scaa.loss.kl_term(qz)
-  assert res.shape == (stoch_samples, n, d)
+  mean = torch.tensor(np.random.normal(size=(n, d)), dtype=torch.float)
+  scale = torch.exp(torch.tensor(np.random.normal(size=(n, d)), dtype=torch.float))
+  res = scaa.loss.kl_term(mean, scale)
+  assert res.shape == (n, d)
+  assert np.isfinite(res).all()
+  assert (res > 0).all()
 
 def test_pois_llik(dims):
   n, p, d, stoch_samples = dims

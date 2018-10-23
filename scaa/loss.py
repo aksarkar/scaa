@@ -1,12 +1,15 @@
 import torch
 
-def kl_term(qz):
-  return torch.distributions.Normal(loc=0, scale=1).log_prob(qz)
+def kl_term(mean, scale):
+  """KL divergence between N(mean, scale) and N(0, 1)"""
+  return .5 * (1 - 2 * torch.log(scale) + (mean * mean + scale * scale))
 
 def pois_llik(x, mean):
-  return x * torch.log(mean) + mean - torch.lgamma(x + 1)
+  """Log likelihood of x distributed as Poisson"""
+  return x * torch.log(mean) - mean - torch.lgamma(x + 1)
 
 def zip_llik(x, mean, logodds):
+  """Log likelihood of x distributed as ZIP"""
   S = torch.nn.functional.softplus
   case_zero = -S(-logodds) + S(pois_llik(x, mean) + S(-logodds))
   case_non_zero = -S(logodds) + pois_llik(x, mean)
