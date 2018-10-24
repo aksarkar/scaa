@@ -21,13 +21,6 @@ def test_decoder(dims):
   assert pi.shape == (n, p)
   assert lam.shape == (n, p)
 
-def test_binary_disciminator(dims):
-  n, p, d, stoch_samples = dims
-  adv = scaa.modules.BinaryDisciminator(d)
-  z = torch.tensor(np.random.normal(size=(n, d)), dtype=torch.float)
-  py = adv.forward(z)
-  assert py.shape == (n, 1)
-
 def test_zipvae(simulate):
   x, eta = simulate
   n, p = x.shape
@@ -45,3 +38,20 @@ def test_zipvae_denoise(simulate):
   lam = model.denoise(x)
   assert lam.shape == (n, p)
   assert (lam > 0).all()
+
+def test_disciminator(dims):
+  n, p, d, stoch_samples = dims
+  adv = scaa.modules.Discriminator(d, num_classes=2)
+  z = torch.tensor(np.random.normal(size=(n, d)), dtype=torch.float)
+  py = adv.forward(z)
+  assert py.shape == (n, 2)
+
+def test_zipaae(simulate):
+  x, eta = simulate
+  y = (np.random.uniform(size=x.shape[0]) < 0.5).astype(np.int)
+  n, p = x.shape
+  latent_dim = 10
+  x = torch.utils.data.DataLoader(torch.tensor(x, dtype=torch.float), batch_size=n)
+  y = torch.utils.data.DataLoader(torch.tensor(y, dtype=torch.long), batch_size=n)
+  model = scaa.modules.ZIPAAE(p, latent_dim, 2)
+  model.fit(x, y, lr=1e-2, verbose=True, max_epochs=1)
