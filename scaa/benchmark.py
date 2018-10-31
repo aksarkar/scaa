@@ -1,6 +1,7 @@
 import itertools
 import numpy as np
 import pandas as pd
+import scipy.sparse as ss
 import scipy.stats as st
 import torch
 
@@ -117,7 +118,16 @@ def pois_llik(lam, train, test):
   return st.poisson(mu=lam).logpmf(test).sum()
 
 def train_test_split(x, p=0.5):
-  train = np.random.binomial(n=x, p=p, size=x.shape)
+  if ss.issparse(x):
+    data = np.random.binomial(n=x.data.astype(np.int), p=p, size=x.data.shape)
+    if ss.isspmatrix_csr(x):
+      train = ss.csr_matrix((data, x.indices, x.indptr), shape=x.shape)
+    elif ss.isspmatrix_csc(x):
+      train = ss.csc_matrix((data, x.indices, x.indptr), shape=x.shape)
+    else:
+      raise NotImplementedError('sparse matrix type not supported')
+  else:
+    train = np.random.binomial(n=x, p=p, size=x.shape)
   test = x - train
   return train, test
 
@@ -191,14 +201,20 @@ def generalization_score_dca(train, test, **kwargs):
   lam = data.X
   return pois_llik(lam, train, test)
 
+def get_data_loader(x):
+  import torch.utils.data
+  if ss.issparse(x):
+    x = scaa.dataset.SparseDataset(x)
+  else:
+    x = torch.tensor(x, dtype=torch.float)
+  training_data = torch.utils.data.DataLoader(x, batch_size=25, shuffle=False)
+
 def generalization_score_zipvae(train, test, **kwargs):
   import scaa
   import torch
-  import torch.utils.data
-  n, p = train.shape
-  training_data = torch.utils.data.DataLoader(torch.tensor(train, dtype=torch.float), batch_size=25, shuffle=False)
+  training_data = get_data_loader(train)
   with torch.cuda.device(0):
-    model = scaa.modules.ZIPVAE(p, 10).fit(training_data, lr=1e-2, max_epochs=10, verbose=False)
+    model = scaa.modules.ZIPVAE(train.shape[1], 10).fit(training_data, lr=1e-2, max_epochs=10, verbose=False)
     lam = model.denoise(training_data)
   return pois_llik(lam, train, test)
 
@@ -208,8 +224,9 @@ def generalization_score_zipaae(train, test, y, **kwargs):
   import torch.utils.data
   n, p = train.shape
   training_data = torch.utils.data.DataLoader(torch.tensor(train, dtype=torch.float), batch_size=25, shuffle=False)
+  labels = torch.utils.data.DataLoader(torch.tensor(y, dtype=torch.long), batch_size=25, shuffle=False)
   with torch.cuda.device(0):
-    model = scaa.modules.ZIPVAE(p, 10).fit(training_data, lr=1e-2, max_epochs=10, verbose=False)
+    model = scaa.modules.ZIPAAE(p, 10, num_classes=(y.max() + 1)).fit(training_data, labels, lr=1e-2, max_epochs=10, verbose=False)
     lam = model.denoise(training_data)
   return pois_llik(lam, train, test)
 

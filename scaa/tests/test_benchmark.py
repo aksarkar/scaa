@@ -1,22 +1,10 @@
 import numpy as np
 import pytest
 import scaa
-import tensorflow as tf
+import scipy.sparse as ss
 import torch
 
-@pytest.fixture
-def simulate():
-  return scaa.benchmark.simulate_pois(n=30, p=60, rank=1, eta_max=3)
-
-@pytest.fixture
-def simulate_holdout():
-  return scaa.benchmark.simulate_pois(n=200, p=300, rank=1, eta_max=3, holdout=.1)
-  
-@pytest.fixture
-def simulate_train_test():
-  x, eta = scaa.benchmark.simulate_pois(n=200, p=300, rank=1, eta_max=3, holdout=.1)
-  train, test = scaa.benchmark.train_test_split(x)
-  return train, test, eta
+from fixtures import *
 
 def test_simulate_pois_rank1():
   x, eta = scaa.benchmark.simulate_pois(n=30, p=60, rank=1)
@@ -96,6 +84,24 @@ def test_train_test_split(simulate):
   assert train.shape == x.shape
   assert test.shape == x.shape
 
+def test_train_test_split_sparse_csr(simulate_holdout):
+  x, eta = simulate_holdout
+  x = ss.csr_matrix(x.filled(0))
+  train, test = scaa.benchmark.train_test_split(x)
+  assert train.shape == x.shape
+  assert test.shape == x.shape
+  assert ss.isspmatrix_csr(train)
+  assert ss.isspmatrix_csr(test)
+
+def test_train_test_split_sparse_csc(simulate_holdout):
+  x, eta = simulate_holdout
+  x = ss.csc_matrix(x.filled(0))
+  train, test = scaa.benchmark.train_test_split(x)
+  assert train.shape == x.shape
+  assert test.shape == x.shape
+  assert ss.isspmatrix_csc(train)
+  assert ss.isspmatrix_csc(test)
+
 def test_generalization_score_oracle(simulate_train_test):
   train, test, eta = simulate_train_test
   scaa.benchmark.generalization_score_oracle(train, test, eta=eta)
@@ -135,7 +141,7 @@ def test_generalization_score_zipvae(simulate_train_test):
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='torch reports CUDA not available')
 def test_generalization_score_zipaae(simulate_train_test):
   train, test, eta = simulate_train_test
-  y = np.random.uniform(size=train.shape[0]) < 0.5
+  y = (np.random.uniform(size=train.shape[0]) < 0.5).astype(int)
   scaa.benchmark.generalization_score_zipaae(train, test, y=y, eta=eta)
 
 def test_read_ipsc():

@@ -1,3 +1,4 @@
+import scaa
 import numpy as np
 import pytest
 
@@ -12,10 +13,14 @@ def dims():
 
 @pytest.fixture
 def simulate():
-  np.random.seed(0)
-  l = np.random.normal(size=(100, 3))
-  f = np.random.normal(size=(3, 1000))
-  eta = l.dot(f)
-  eta *= 5 / eta.max()
-  x = np.random.poisson(lam=np.exp(eta))
-  return x, eta
+  return scaa.benchmark.simulate_pois(n=30, p=60, rank=1, eta_max=3)
+
+@pytest.fixture
+def simulate_holdout():
+  return scaa.benchmark.simulate_pois(n=200, p=300, rank=1, eta_max=3, holdout=.1)
+  
+@pytest.fixture
+def simulate_train_test():
+  x, eta = scaa.benchmark.simulate_pois(n=200, p=300, rank=1, eta_max=3, holdout=.1)
+  train, test = scaa.benchmark.train_test_split(x)
+  return train, test, eta
