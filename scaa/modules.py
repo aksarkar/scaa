@@ -3,7 +3,7 @@ import scaa
 import torch
 
 class Encoder(torch.nn.Module):
-  """Encoder q(z | x) = N(mu(x), sigma^2(x))
+  """Encoder q(z | x) = N(mu(x), sigma^2(x) I)
 
   """
   def __init__(self, input_dim, output_dim):
@@ -91,7 +91,7 @@ class Discriminator(torch.nn.Module):
       torch.nn.Linear(input_dim, input_dim),
       torch.nn.ReLU(),
       torch.nn.Linear(input_dim, num_classes),
-      torch.nn.LogSoftmax(),
+      torch.nn.LogSoftmax(dim=1),
     )
 
   def forward(self, x):
@@ -141,6 +141,9 @@ class ZIPAAE(torch.nn.Module):
         if verbose and not i % 10:
           print(f'[epoch={epoch} batch={i}] vae={loss0} adv={loss1} gen={loss2}')
     return self
+
+  def denoise(self, x):
+    return self.vae.denoise(x)
 
 class Generator(torch.nn.Module):
   """Generator G(z) = N(mu(z), sigma(z))
