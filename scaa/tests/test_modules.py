@@ -36,6 +36,7 @@ def test_zipvae_denoise(simulate):
   x = torch.utils.data.DataLoader(torch.tensor(x, dtype=torch.float), batch_size=n)
   model = scaa.modules.ZIPVAE(p, latent_dim).fit(x, lr=1e-3, max_epochs=10, verbose=True)
   lam = model.denoise(x)
+  assert isinstance(lam, np.ndarray)
   assert lam.shape == (n, p)
   assert (lam > 0).all()
 

@@ -21,6 +21,6 @@ def simulate_holdout():
   
 @pytest.fixture
 def simulate_train_test():
-  x, eta = scaa.benchmark.simulate_pois(n=200, p=300, rank=1, eta_max=3, holdout=.1)
+  x, eta = scaa.benchmark.simulate_pois(n=200, p=300, rank=1, eta_max=3)
   train, test = scaa.benchmark.train_test_split(x)
   return train, test, eta

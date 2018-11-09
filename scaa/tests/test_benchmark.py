@@ -78,6 +78,20 @@ def test_imputation_score_plra(simulate_holdout):
 def test_evaluate_pois_imputation():
   res = scaa.benchmark.evaluate_pois_imputation(eta_max=3, num_trials=1)
 
+def test_pois_llik(simulate_train_test):
+  train, test, eta = simulate_train_test
+  res = scaa.benchmark.pois_llik(np.exp(eta), train, test)
+  assert np.isscalar(res)
+  assert res < 0
+
+def test_pois_llik_sparse(simulate_train_test):
+  train, test, eta = simulate_train_test
+  train = ss.csr_matrix(train)
+  test = ss.csr_matrix(test)
+  res = scaa.benchmark.pois_llik(np.exp(eta), train, test)
+  assert np.isscalar(res)
+  assert res < 0
+
 def test_train_test_split(simulate):
   x, eta = simulate
   train, test = scaa.benchmark.train_test_split(x)
@@ -102,51 +116,88 @@ def test_train_test_split_sparse_csc(simulate_holdout):
   assert ss.isspmatrix_csc(train)
   assert ss.isspmatrix_csc(test)
 
+def test_get_data_loader(simulate_holdout):
+  x, eta = simulate_holdout
+  x = ss.csr_matrix(x.filled(0))
+  loader = scaa.benchmark.get_data_loader(x)
+  assert next(iter(loader)).shape == (25, x.shape[1])
+
+def test_get_data_loader_dtype():
+  y = (np.random.uniform(size=(100, 1)) < 0.5).astype(int)
+  loader = scaa.benchmark.get_data_loader(y, dtype=torch.long)
+  batch = next(iter(loader))
+  assert batch.shape == (25, 1)
+  assert batch.dtype == torch.long  
+
+def test_get_data_loader_batch_size():
+  y = (np.random.uniform(size=(100, 1)) < 0.5).astype(int)
+  loader = scaa.benchmark.get_data_loader(y, dtype=torch.long, batch_size=10)
+  batch = next(iter(loader))
+  assert batch.shape == (10, 1)
+  assert batch.dtype == torch.long  
+
 def test_generalization_score_oracle(simulate_train_test):
   train, test, eta = simulate_train_test
-  scaa.benchmark.generalization_score_oracle(train, test, eta=eta)
+  res = scaa.benchmark.generalization_score_oracle(train, test, eta=eta)
+  assert np.isfinite(res)
+  assert res < 0
 
 def test_generalization_score_plra1(simulate_train_test):
   train, test, eta = simulate_train_test
-  scaa.benchmark.generalization_score_plra1(train, test, eta=eta)
+  res = scaa.benchmark.generalization_score_plra1(train, test, eta=eta)
+  assert np.isfinite(res)
+  assert res < 0
 
 def test_generalization_score_nmf(simulate_train_test):
   train, test, eta = simulate_train_test
-  scaa.benchmark.generalization_score_nmf(train, test, eta=eta)
+  res = scaa.benchmark.generalization_score_nmf(train, test, eta=eta)
+  assert np.isfinite(res)
+  assert res < 0
 
 def test_generalization_score_grad(simulate_train_test):
   train, test, eta = simulate_train_test
-  scaa.benchmark.generalization_score_grad(train, test, eta=eta)
+  res = scaa.benchmark.generalization_score_grad(train, test, eta=eta)
+  assert np.isfinite(res)
+  assert res < 0
 
-@pytest.mark.skip(reason='CUDA version incompatability')
+# @pytest.mark.skip(reason='CUDA version incompatability')
 def test_generalization_score_hpf(simulate_train_test):
   train, test, eta = simulate_train_test
-  scaa.benchmark.generalization_score_hpf(train, test, eta=eta)
+  res = scaa.benchmark.generalization_score_hpf(train, test, eta=eta)
+  assert np.isfinite(res)
+  assert res < 0
 
 @pytest.mark.skip(reason='torch bug?')
 def test_generalization_score_scvi(simulate_train_test):
   train, test, eta = simulate_train_test
-  scaa.benchmark.generalization_score_scvi(train, test, eta=eta)
+  res = scaa.benchmark.generalization_score_scvi(train, test, eta=eta)
+  assert np.isfinite(res)
+  assert res < 0
 
 @pytest.mark.skip(reason='Broken package')
 def test_generalization_score_dca(simulate_train_test):
   train, test, eta = simulate_train_test
-  scaa.benchmark.generalization_score_dca(train, test, eta=eta)
+  res = scaa.benchmark.generalization_score_dca(train, test, eta=eta)
+  assert np.isfinite(res)
+  assert res < 0
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='torch reports CUDA not available')
 def test_generalization_score_zipvae(simulate_train_test):
   train, test, eta = simulate_train_test
-  scaa.benchmark.generalization_score_zipvae(train, test, eta=eta)
+  res = scaa.benchmark.generalization_score_zipvae(train, test, eta=eta)
+  assert np.isfinite(res)
+  assert res < 0
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason='torch reports CUDA not available')
 def test_generalization_score_zipaae(simulate_train_test):
   train, test, eta = simulate_train_test
   y = (np.random.uniform(size=train.shape[0]) < 0.5).astype(int)
-  scaa.benchmark.generalization_score_zipaae(train, test, y=y, eta=eta)
+  res = scaa.benchmark.generalization_score_zipaae(train, test, y=y, eta=eta)
+  assert np.isfinite(res)
+  assert res < 0
 
-def test_read_ipsc():
-  res = scaa.benchmark.read_ipsc()
-  assert res.shape == (5597, 9957)
-
-def test_evaluate_generalization():
-  res = scaa.benchmark.evaluate_generalization(num_trials=1)
+def test_generalization_score_lda(simulate_train_test):
+  train, test, eta = simulate_train_test
+  res = scaa.benchmark.generalization_score_lda(train, test, rank=10)
+  assert np.isfinite(res)
+  assert res < 0

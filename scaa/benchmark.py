@@ -1,6 +1,7 @@
 import itertools
 import numpy as np
 import pandas as pd
+import scaa
 import scipy.sparse as ss
 import scipy.stats as st
 import torch
@@ -39,6 +40,44 @@ def training_score_plra(x, rank):
 def training_score_plra1(x, rank):
   import wlra
   return st.poisson(mu=np.exp(wlra.plra(x, rank=rank, max_outer_iters=1))).logpmf(x).sum()
+
+def training_score_lda(x, rank, learning_method='batch', **kwargs):
+  import sklearn.decomposition
+  model = sklearn.decomposition.LatentDirichletAllocation(n_components=rank, learning_method=learning_method, **kwargs)
+  L = model.fit_transform(x)
+  F = model.components_
+  lam = (L / L.sum(axis=0)).dot(F)
+  return st.poisson(mu=lam).logpmf(x).sum()
+
+def training_score_maptpx(x, rank, **kwargs):
+  import rpy2.robjects.packages
+  import rpy2.robjects.numpy2ri
+  rpy2.robjects.numpy2ri.activate()
+  maptpx = rpy2.robjects.packages.importr('maptpx')
+  res = maptpx.topics(x, K=rank, **kwargs)
+  L = np.array(res.rx2('omega'))
+  F = np.array(res.rx2('theta'))
+  return st.poisson(mu=x.sum(axis=1, keepdims=True) * L.dot(F.T)).logpmf(x).sum()
+
+def training_score_hpf(x, rank=50, **kwargs):
+  import scHPF.preprocessing
+  import scHPF.train
+  import tempfile
+  with tempfile.TemporaryDirectory(prefix='/scratch/midway2/aksarkar/ideas/') as d:
+    # scHPF assumes genes x cells
+    scHPF.preprocessing.split_dataset_hpf(x.T, outdir=d)
+    # Set bp, dp as in scHPF.train
+    bp = x.sum(axis=1).mean() / x.sum(axis=1).var()
+    dp = x.sum(axis=0).mean() / x.sum(axis=0).var()
+    opt = scHPF.train.run_trials(
+      indir=d, outdir=d, prefix='',
+      nfactors=rank, a=0.3, ap=1, bp=bp, c=0.3, cp=1, dp=dp,
+      # This is broken when we call the API directly
+      logging_options={'log_phi': False})
+    L = np.load(f'{opt}/beta_shape.npy') / np.load(f'{opt}/beta_invrate.npy')
+    F = np.load(f'{opt}/theta_shape.npy') / np.load(f'{opt}/theta_invrate.npy')
+    # We assume cells x genes
+    return st.poisson(mu=F.dot(L.T)).logpmf(x).sum()
 
 def evaluate_training(rank=3, eta_max=2, num_trials=10):
   result = []
@@ -114,7 +153,10 @@ def evaluate_pois_imputation(rank=3, holdout=0.25, eta_max=None, num_trials=10):
   return result
 
 def pois_llik(lam, train, test):
-  lam *= test.sum(axis=0, keepdims=True) / train.sum(axis=0, keepdims=True)
+  if ss.issparse(train):
+    raise NotImplementedError
+  else:
+    lam *= test.sum(axis=1, keepdims=True) / train.sum(axis=1, keepdims=True)
   return st.poisson(mu=lam).logpmf(test).sum()
 
 def train_test_split(x, p=0.5):
@@ -137,26 +179,50 @@ def generalization_score_oracle(train, test, eta):
 def generalization_score_plra1(train, test, rank=10, **kwargs):
   try:
     import wlra
+    # Estimate the rank by imputation loss
+    opt = np.inf
+    opt_rank = 1
+    for rank in range(1, 10):
+      x = np.ma.masked_array(train, np.random.uniform(size=train.shape) < 0.1)
+      # Use Poisson loss
+      _, loss = imputation_score_plra1(x, rank)
+      if np.isfinite(loss) and loss < opt:
+        opt_rank = rank
     lam = np.exp(wlra.plra(train, rank=rank))
     return pois_llik(lam, train, test)
   except:
     return np.nan
 
-def generalization_score_nmf(train, test, rank=50, **kwargs):
+def generalization_score_nmf(train, test, **kwargs):
   try:
-    from wlra.nmf import nmr
-    lam = nmf(train, rank=rank)
+    from wlra.nmf import nmf
+    # Estimate the rank by imputation loss
+    opt = np.inf
+    opt_rank = 1
+    for rank in range(1, 10):
+      x = np.ma.masked_array(train, np.random.uniform(size=train.shape) < 0.1)
+      # Use Poisson loss
+      _, loss = imputation_score_nmf(x, rank)
+      if np.isfinite(loss) and loss < opt:
+        opt_rank = rank
+    lam = nmf(train, rank=opt_rank)
     return pois_llik(lam, train, test)
   except:
     return np.nan
 
+def generalization_score_nmf_frob(train, test, n_components=10, **kwargs):
+  import sklearn.decomposition
+  m = sklearn.decomposition.NMF(n_components=n_components, solver='mu', beta_loss=1).fit(train)
+  return pois_llik(m.transform(train).dot(m.components_), train, test)
+
 def generalization_score_grad(train, test, rank=10, **kwargs):
   try:
     from wlra.grad import PoissonFA
-    model = wlra.grad.PoissonFA(n_samples=train.shape[0], n_features=train.shape[1], n_components=rank).fit(train, atol=1e-3, matrain_epochs=10000)
-    lam = np.exp(np.exp(m.L.dot(m.F)))
+    model = PoissonFA(n_samples=train.shape[0], n_features=train.shape[1], n_components=rank).fit(train, atol=1e-3, max_epochs=10000)
+    lam = np.exp(model.L.dot(model.F))
     return pois_llik(lam, train, test)
-  except:
+  except Exception as e:
+    print(e)
     return np.nan
 
 def generalization_score_hpf(train, test, rank=50, **kwargs):
@@ -176,7 +242,8 @@ def generalization_score_hpf(train, test, rank=50, **kwargs):
       logging_options={'log_phi': False})
     L = np.load(f'{opt}/beta_invrate.npy') * np.load(f'{opt}/beta_shape.npy')
     F = np.load(f'{opt}/theta_invrate.npy') * np.load(f'{opt}/theta_shape.npy')
-    return pois_llik(L.dot(F.T), train, test)
+    # We assume cells x genes
+    return pois_llik(F.dot(L.T), train, test)
 
 def generalization_score_scvi(train, test, **kwargs):
   from scvi.dataset import GeneExpressionDataset
@@ -201,52 +268,50 @@ def generalization_score_dca(train, test, **kwargs):
   lam = data.X
   return pois_llik(lam, train, test)
 
-def get_data_loader(x):
+def get_data_loader(x, dtype=torch.float, batch_size=25, shuffle=False, **kwargs):
+  import scaa
   import torch.utils.data
   if ss.issparse(x):
     x = scaa.dataset.SparseDataset(x)
   else:
-    x = torch.tensor(x, dtype=torch.float)
-  training_data = torch.utils.data.DataLoader(x, batch_size=25, shuffle=False)
+    x = torch.tensor(x, dtype=dtype)
+  return torch.utils.data.DataLoader(x, batch_size=batch_size, shuffle=shuffle)
 
-def generalization_score_zipvae(train, test, **kwargs):
+def generalization_score_zipvae(train, test, lr=1e-2, max_epochs=10, **kwargs):
   import scaa
   import torch
-  training_data = get_data_loader(train)
+  training_data = get_data_loader(train, **kwargs)
   with torch.cuda.device(0):
-    model = scaa.modules.ZIPVAE(train.shape[1], 10).fit(training_data, lr=1e-2, max_epochs=10, verbose=False)
+    model = scaa.modules.ZIPVAE(train.shape[1], 10).fit(training_data, lr=lr, max_epochs=max_epochs)
     lam = model.denoise(training_data)
   return pois_llik(lam, train, test)
 
-def generalization_score_zipaae(train, test, y, **kwargs):
+def generalization_score_zipaae(train, test, y, lr=1e-2, max_epochs=10, **kwargs):
   import scaa
   import torch
   import torch.utils.data
-  n, p = train.shape
-  training_data = torch.utils.data.DataLoader(torch.tensor(train, dtype=torch.float), batch_size=25, shuffle=False)
-  labels = torch.utils.data.DataLoader(torch.tensor(y, dtype=torch.long), batch_size=25, shuffle=False)
+  training_data = get_data_loader(train, **kwargs)
+  labels = get_data_loader(y, dtype=torch.long, **kwargs)
   with torch.cuda.device(0):
-    model = scaa.modules.ZIPAAE(p, 10, num_classes=(y.max() + 1)).fit(training_data, labels, lr=1e-2, max_epochs=10, verbose=False)
+    model = scaa.modules.ZIPAAE(train.shape[1], 10, num_classes=(y.max() + 1)).fit(training_data, labels, lr=lr, max_epochs=max_epochs)
     lam = model.denoise(training_data)
   return pois_llik(lam, train, test)
 
-def read_ipsc():
-  keep_samples = pd.read_table('/project2/mstephens/aksarkar/projects/singlecell-qtl/data/quality-single-cells.txt', index_col=0, header=None)
-  keep_genes = pd.read_table('/project2/mstephens/aksarkar/projects/singlecell-qtl/data/genes-pass-filter.txt', index_col=0, header=None)
-  x = (pd.read_table('/project2/mstephens/aksarkar/projects/singlecell-qtl/data/scqtl-counts.txt.gz', index_col=0)
-       .loc[keep_genes.values.ravel(),keep_samples.values.ravel()]
-       .values.T)
-  return x
+def generalization_score_lda(train, test, n_components=10, learning_method='online', batch_size=100, **kwargs):
+  import sklearn.decomposition
+  model = sklearn.decomposition.LatentDirichletAllocation(n_components=n_components, learning_method=learning_method, batch_size=batch_size, **kwargs)
+  L = model.fit_transform(train)
+  F = model.components_
+  lam = (L / L.sum(axis=0)).dot(F)
+  return pois_llik(lam, train, test)
 
-def evaluate_generalization(num_trials):
-  result = dict()
-  for method in ['oracle', 'zipvae']:
-    result[method] = []
-    for trial in range(num_trials):
-      x, eta = simulate_pois(n=500, p=1000, rank=3, eta_max=3, seed=trial)
-      train, test = train_test_split(x)
-      score = globals()[f'generalization_score_{method}'](train, test, eta=eta)
-      result[method].append(score)
-  result = pd.DataFrame.from_dict(result)
-  result.index.name = 'trial'
-  return result
+def generalization_score_maptpx(train, test, rank, **kwargs):
+  import rpy2.robjects.packages
+  import rpy2.robjects.numpy2ri
+  rpy2.robjects.numpy2ri.activate()
+  maptpx = rpy2.robjects.packages.importr('maptpx')
+  res = maptpx.topics(train, K=rank, **kwargs)
+  L = np.array(res.rx2('omega'))
+  F = np.array(res.rx2('theta'))
+  lam = train.sum(axis=1, keepdims=True) * L.dot(F.T)
+  return pois_llik(lam, train, test)
