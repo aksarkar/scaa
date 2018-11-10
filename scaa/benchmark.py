@@ -23,15 +23,22 @@ def simulate_pois(n, p, rank, eta_max=None, holdout=None, seed=0):
 def training_score_oracle(x, eta):
   return st.poisson(mu=np.exp(eta)).logpmf(x).sum()
 
-def training_score_nmf(x, rank):
+def training_score_nmf(x, rank=10):
   from wlra.nmf import nmf
   return st.poisson(mu=nmf(x, rank)).logpmf(x).sum()
 
+def training_score_nmf_frob(x, rank=10):
+  import sklearn.decomposition
+  m = sklearn.decomposition.NMF(n_components=rank, solver='mu', beta_loss=1).fit(x)
+  return st.poisson(mu=m.transform(x).dot(m.components_)).logpmf(x).sum()
+
 def training_score_grad(x, rank):
+  import torch
   import wlra.grad
-  m = (wlra.grad.PoissonFA(n_samples=x.shape[0], n_features=x.shape[1], n_components=rank)
-       .fit(x, atol=1e-3, max_epochs=10000))
-  return st.poisson(mu=np.exp(m.L.dot(m.F))).logpmf(x).sum()
+  with torch.autograd.set_grad_enabled(True):
+    m = (wlra.grad.PoissonFA(n_samples=x.shape[0], n_features=x.shape[1], n_components=rank)
+         .fit(x, atol=1e-3, max_epochs=10000))
+    return st.poisson(mu=np.exp(m.L.dot(m.F))).logpmf(x).sum()
 
 def training_score_plra(x, rank):
   import wlra
@@ -41,15 +48,15 @@ def training_score_plra1(x, rank):
   import wlra
   return st.poisson(mu=np.exp(wlra.plra(x, rank=rank, max_outer_iters=1))).logpmf(x).sum()
 
-def training_score_lda(x, rank, learning_method='batch', **kwargs):
+def training_score_lda(x, rank=10, learning_method='online', batch_size=100, **kwargs):
   import sklearn.decomposition
-  model = sklearn.decomposition.LatentDirichletAllocation(n_components=rank, learning_method=learning_method, **kwargs)
+  model = sklearn.decomposition.LatentDirichletAllocation(n_components=rank, learning_method=learning_method, batch_size=batch_size, **kwargs)
   L = model.fit_transform(x)
   F = model.components_
   lam = (L / L.sum(axis=0)).dot(F)
   return st.poisson(mu=lam).logpmf(x).sum()
 
-def training_score_maptpx(x, rank, **kwargs):
+def training_score_maptpx(x, rank=10, **kwargs):
   import rpy2.robjects.packages
   import rpy2.robjects.numpy2ri
   rpy2.robjects.numpy2ri.activate()
@@ -63,7 +70,9 @@ def training_score_hpf(x, rank=50, **kwargs):
   import scHPF.preprocessing
   import scHPF.train
   import tempfile
+  import tensorflow as tf
   with tempfile.TemporaryDirectory(prefix='/scratch/midway2/aksarkar/ideas/') as d:
+    tf.reset_default_graph()
     # scHPF assumes genes x cells
     scHPF.preprocessing.split_dataset_hpf(x.T, outdir=d)
     # Set bp, dp as in scHPF.train
@@ -78,6 +87,31 @@ def training_score_hpf(x, rank=50, **kwargs):
     F = np.load(f'{opt}/theta_shape.npy') / np.load(f'{opt}/theta_invrate.npy')
     # We assume cells x genes
     return st.poisson(mu=F.dot(L.T)).logpmf(x).sum()
+
+def training_score_scvi(train, **kwargs):
+  from scvi.dataset import GeneExpressionDataset
+  from scvi.inference import UnsupervisedTrainer
+  from scvi.models import VAE
+  data = GeneExpressionDataset(*GeneExpressionDataset.get_attributes_from_matrix(train))
+  vae = VAE(n_input=train.shape[1])
+  m = UnsupervisedTrainer(vae, data, verbose=False)
+  m.train(n_epochs=100)
+  # Training permuted the data for minibatching. Unpermute before "imputing"
+  # (estimating lambda)
+  lam = np.vstack([m.train_set.sequential().imputation(),
+                   m.test_set.sequential().imputation()])
+  return st.poisson(mu=lam).logpmf(train).sum()
+
+def training_score_zipvae(train, lr=1e-2, max_epochs=10, **kwargs):
+  import scaa
+  import torch
+  # scVI does not play nicely
+  with torch.autograd.set_grad_enabled(True):
+    training_data = get_data_loader(train, **kwargs)
+    with torch.cuda.device(0):
+      model = scaa.modules.ZIPVAE(train.shape[1], 10).fit(training_data, lr=lr, max_epochs=max_epochs)
+      lam = model.denoise(training_data)
+    return st.poisson(mu=lam).logpmf(train).sum()
 
 def evaluate_training(rank=3, eta_max=2, num_trials=10):
   result = []
@@ -216,20 +250,20 @@ def generalization_score_nmf_frob(train, test, n_components=10, **kwargs):
   return pois_llik(m.transform(train).dot(m.components_), train, test)
 
 def generalization_score_grad(train, test, rank=10, **kwargs):
-  try:
-    from wlra.grad import PoissonFA
+  import torch
+  from wlra.grad import PoissonFA
+  with torch.autograd.set_grad_enabled(True):
     model = PoissonFA(n_samples=train.shape[0], n_features=train.shape[1], n_components=rank).fit(train, atol=1e-3, max_epochs=10000)
     lam = np.exp(model.L.dot(model.F))
     return pois_llik(lam, train, test)
-  except Exception as e:
-    print(e)
-    return np.nan
 
 def generalization_score_hpf(train, test, rank=50, **kwargs):
   import scHPF.preprocessing
   import scHPF.train
   import tempfile
+  import tensorflow as tf
   with tempfile.TemporaryDirectory(prefix='/scratch/midway2/aksarkar/ideas/') as d:
+    tf.reset_default_graph()
     # scHPF assumes genes x cells
     scHPF.preprocessing.split_dataset_hpf(train.T, outdir=d)
     # Set bp, dp as in scHPF.train
@@ -240,8 +274,8 @@ def generalization_score_hpf(train, test, rank=50, **kwargs):
       nfactors=rank, a=0.3, ap=1, bp=bp, c=0.3, cp=1, dp=dp,
       # This is broken when we call the API directly
       logging_options={'log_phi': False})
-    L = np.load(f'{opt}/beta_invrate.npy') * np.load(f'{opt}/beta_shape.npy')
-    F = np.load(f'{opt}/theta_invrate.npy') * np.load(f'{opt}/theta_shape.npy')
+    L = np.load(f'{opt}/beta_shape.npy') / np.load(f'{opt}/beta_invrate.npy')
+    F = np.load(f'{opt}/theta_shape.npy') / np.load(f'{opt}/theta_invrate.npy')
     # We assume cells x genes
     return pois_llik(F.dot(L.T), train, test)
 
@@ -255,9 +289,10 @@ def generalization_score_scvi(train, test, **kwargs):
   m.train(n_epochs=100)
   # Training permuted the data for minibatching. Unpermute before "imputing"
   # (estimating lambda)
-  lam = np.vstack([m.train_set.sequential().imputation(),
-                   m.test_set.sequential().imputation()])
-  return pois_llik(lam, train, test)
+  with torch.autograd.set_grad_enabled(False):
+    lam = np.vstack([m.train_set.sequential().imputation(),
+                     m.test_set.sequential().imputation()])
+    return pois_llik(lam, train, test)
 
 def generalization_score_dca(train, test, **kwargs):
   import anndata
@@ -280,22 +315,26 @@ def get_data_loader(x, dtype=torch.float, batch_size=25, shuffle=False, **kwargs
 def generalization_score_zipvae(train, test, lr=1e-2, max_epochs=10, **kwargs):
   import scaa
   import torch
-  training_data = get_data_loader(train, **kwargs)
-  with torch.cuda.device(0):
-    model = scaa.modules.ZIPVAE(train.shape[1], 10).fit(training_data, lr=lr, max_epochs=max_epochs)
-    lam = model.denoise(training_data)
-  return pois_llik(lam, train, test)
+  # scVI does not play nicely
+  with torch.autograd.set_grad_enabled(True):
+    training_data = get_data_loader(train, **kwargs)
+    with torch.cuda.device(0):
+      model = scaa.modules.ZIPVAE(train.shape[1], 10).fit(training_data, lr=lr, max_epochs=max_epochs)
+      lam = model.denoise(training_data)
+    return pois_llik(lam, train, test)
 
 def generalization_score_zipaae(train, test, y, lr=1e-2, max_epochs=10, **kwargs):
   import scaa
   import torch
   import torch.utils.data
-  training_data = get_data_loader(train, **kwargs)
-  labels = get_data_loader(y, dtype=torch.long, **kwargs)
-  with torch.cuda.device(0):
-    model = scaa.modules.ZIPAAE(train.shape[1], 10, num_classes=(y.max() + 1)).fit(training_data, labels, lr=lr, max_epochs=max_epochs)
-    lam = model.denoise(training_data)
-  return pois_llik(lam, train, test)
+  # scVI does not play nicely
+  with torch.autograd.set_grad_enabled(True):
+    training_data = get_data_loader(train, **kwargs)
+    labels = get_data_loader(y, dtype=torch.long, **kwargs)
+    with torch.cuda.device(0):
+      model = scaa.modules.ZIPAAE(train.shape[1], 10, num_classes=(y.max() + 1)).fit(training_data, labels, lr=lr, max_epochs=max_epochs)
+      lam = model.denoise(training_data)
+    return pois_llik(lam, train, test)
 
 def generalization_score_lda(train, test, n_components=10, learning_method='online', batch_size=100, **kwargs):
   import sklearn.decomposition

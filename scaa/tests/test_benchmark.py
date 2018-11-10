@@ -49,6 +49,31 @@ def test_training_score_plra1(simulate):
   res = scaa.benchmark.training_score_plra1(x, rank=1)
   assert res <= 0
 
+def test_training_score_lda(simulate):
+  x, eta = simulate
+  res = scaa.benchmark.training_score_lda(x)
+  assert res <= 0
+
+def test_training_score_maptpx(simulate):
+  x, eta = simulate
+  res = scaa.benchmark.training_score_maptpx(x)
+  assert res <= 0
+
+def test_training_score_hpf(simulate):
+  x, eta = simulate
+  res = scaa.benchmark.training_score_hpf(x)
+  assert res <= 0
+
+def test_training_score_scvi(simulate):
+  x, eta = simulate
+  res = scaa.benchmark.training_score_scvi(x)
+  assert res <= 0
+
+def test_training_score_zipvae(simulate):
+  x, eta = simulate
+  res = scaa.benchmark.training_score_zipvae(x)
+  assert res <= 0
+
 def test_evaluate_training():
   res = scaa.benchmark.evaluate_training(num_trials=1)
   assert res.shape == (1, 6)
@@ -84,6 +109,7 @@ def test_pois_llik(simulate_train_test):
   assert np.isscalar(res)
   assert res < 0
 
+@pytest.mark.xfail(reason='Not implemented')
 def test_pois_llik_sparse(simulate_train_test):
   train, test, eta = simulate_train_test
   train = ss.csr_matrix(train)
@@ -163,11 +189,10 @@ def test_generalization_score_grad(simulate_train_test):
 # @pytest.mark.skip(reason='CUDA version incompatability')
 def test_generalization_score_hpf(simulate_train_test):
   train, test, eta = simulate_train_test
-  res = scaa.benchmark.generalization_score_hpf(train, test, eta=eta)
+  res = scaa.benchmark.generalization_score_hpf(train, test)
   assert np.isfinite(res)
   assert res < 0
 
-@pytest.mark.skip(reason='torch bug?')
 def test_generalization_score_scvi(simulate_train_test):
   train, test, eta = simulate_train_test
   res = scaa.benchmark.generalization_score_scvi(train, test, eta=eta)
@@ -198,6 +223,6 @@ def test_generalization_score_zipaae(simulate_train_test):
 
 def test_generalization_score_lda(simulate_train_test):
   train, test, eta = simulate_train_test
-  res = scaa.benchmark.generalization_score_lda(train, test, rank=10)
+  res = scaa.benchmark.generalization_score_lda(train, test)
   assert np.isfinite(res)
   assert res < 0

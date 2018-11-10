@@ -18,8 +18,10 @@ class Encoder(torch.nn.Module):
     self.scale = torch.nn.Sequential(torch.nn.Linear(128, output_dim), torch.nn.Softplus())
 
   def forward(self, x):
-    q = self.net(x)
-    return self.mean(q), self.scale(q)
+    # scVI does not play nicely
+    with torch.set_grad_enabled(True):
+      q = self.net(x)
+      return self.mean(q), self.scale(q)
 
 class ZIP(torch.nn.Module):
   """Decoder p(x | z) = pi(z) delta0(.) + (1 - pi(z)) Poisson(lambda(z))
@@ -48,6 +50,8 @@ class ZIPVAE(torch.nn.Module):
 
   def loss(self, x, stoch_samples):
     mean, scale = self.encoder.forward(x)
+    assert mean.requires_grad
+    assert scale.requires_grad
     # [batch_size]
     # Important: this is analytic
     kl_term = torch.sum(scaa.loss.kl_term(mean, scale), dim=1)
@@ -55,6 +59,8 @@ class ZIPVAE(torch.nn.Module):
     qz = torch.distributions.Normal(mean, scale).rsample(stoch_samples)
     # [stoch_samples, batch_size, input_dim]
     logodds, mean = self.decoder.forward(qz)
+    assert logodds.requires_grad
+    assert mean.requires_grad
     error_term = torch.mean(torch.sum(scaa.loss.zip_llik(x, mean, logodds), dim=2), dim=0)
     # Important: optim minimizes
     loss = -torch.sum(error_term - kl_term)
@@ -78,9 +84,10 @@ class ZIPVAE(torch.nn.Module):
           print(f'[epoch={epoch} batch={i}] elbo={-loss}')
     return self
 
+  @torch.no_grad()
   def denoise(self, x):
     # Plug E[z | x] into the decoder
-    return torch.cat([self.decoder.forward(self.encoder.forward(batch)[0])[1] for batch in x]).detach().numpy()
+    return torch.cat([self.decoder.forward(self.encoder.forward(batch)[0])[1] for batch in x]).numpy()
 
 class Discriminator(torch.nn.Module):
   def __init__(self, input_dim, num_classes):
