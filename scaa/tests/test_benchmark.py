@@ -34,6 +34,11 @@ def test_training_score_nmf(simulate):
   res = scaa.benchmark.training_score_nmf(x, rank=10)
   assert res <= 0
 
+def test_training_score_nmf(simulate):
+  x, eta = simulate
+  res = scaa.benchmark.training_score_nmf_kl(x, rank=10)
+  assert res <= 0
+
 def test_training_score_grad(simulate):
   x, eta = simulate
   res = scaa.benchmark.training_score_grad(x, rank=1)
@@ -46,7 +51,7 @@ def test_training_score_plra(simulate):
 
 def test_training_score_plra1(simulate):
   x, eta = simulate
-  res = scaa.benchmark.training_score_plra1(x, rank=1)
+  res = scaa.benchmark.training_score_plra1(x)
   assert res <= 0
 
 def test_training_score_lda(simulate):
@@ -177,6 +182,12 @@ def test_generalization_score_plra1(simulate_train_test):
 def test_generalization_score_nmf(simulate_train_test):
   train, test, eta = simulate_train_test
   res = scaa.benchmark.generalization_score_nmf(train, test, eta=eta)
+  assert np.isfinite(res)
+  assert res < 0
+
+def test_generalization_score_nmf_kl(simulate_train_test):
+  train, test, eta = simulate_train_test
+  res = scaa.benchmark.generalization_score_nmf_kl(train, test, eta=eta)
   assert np.isfinite(res)
   assert res < 0
 

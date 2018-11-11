@@ -27,7 +27,7 @@ def training_score_nmf(x, rank=10):
   from wlra.nmf import nmf
   return st.poisson(mu=nmf(x, rank)).logpmf(x).sum()
 
-def training_score_nmf_frob(x, rank=10):
+def training_score_nmf_kl(x, rank=10):
   import sklearn.decomposition
   m = sklearn.decomposition.NMF(n_components=rank, solver='mu', beta_loss=1).fit(x)
   return st.poisson(mu=m.transform(x).dot(m.components_)).logpmf(x).sum()
@@ -44,9 +44,10 @@ def training_score_plra(x, rank):
   import wlra
   return st.poisson(mu=np.exp(wlra.plra(x, rank=rank, max_outer_iters=100, check_converged=True))).logpmf(x).sum()
 
-def training_score_plra1(x, rank):
+def training_score_plra1(x, rank=10):
   import wlra
-  return st.poisson(mu=np.exp(wlra.plra(x, rank=rank, max_outer_iters=1))).logpmf(x).sum()
+  lam = np.exp(wlra.plra(x, rank=rank))
+  return st.poisson(mu=np.exp(lam)).logpmf(x).sum()
 
 def training_score_lda(x, rank=10, learning_method='online', batch_size=100, **kwargs):
   import sklearn.decomposition
@@ -211,40 +212,16 @@ def generalization_score_oracle(train, test, eta):
   return pois_llik(np.exp(eta), train, test)
 
 def generalization_score_plra1(train, test, rank=10, **kwargs):
-  try:
-    import wlra
-    # Estimate the rank by imputation loss
-    opt = np.inf
-    opt_rank = 1
-    for rank in range(1, 10):
-      x = np.ma.masked_array(train, np.random.uniform(size=train.shape) < 0.1)
-      # Use Poisson loss
-      _, loss = imputation_score_plra1(x, rank)
-      if np.isfinite(loss) and loss < opt:
-        opt_rank = rank
-    lam = np.exp(wlra.plra(train, rank=rank))
-    return pois_llik(lam, train, test)
-  except:
-    return np.nan
+  import wlra
+  lam = np.exp(wlra.plra(train, rank=rank))
+  return pois_llik(lam, train, test)
 
-def generalization_score_nmf(train, test, **kwargs):
-  try:
-    from wlra.nmf import nmf
-    # Estimate the rank by imputation loss
-    opt = np.inf
-    opt_rank = 1
-    for rank in range(1, 10):
-      x = np.ma.masked_array(train, np.random.uniform(size=train.shape) < 0.1)
-      # Use Poisson loss
-      _, loss = imputation_score_nmf(x, rank)
-      if np.isfinite(loss) and loss < opt:
-        opt_rank = rank
-    lam = nmf(train, rank=opt_rank)
-    return pois_llik(lam, train, test)
-  except:
-    return np.nan
+def generalization_score_nmf(train, test, rank=10, **kwargs):
+  from wlra.nmf import nmf
+  lam = nmf(train, rank=rank)
+  return pois_llik(lam, train, test)
 
-def generalization_score_nmf_frob(train, test, n_components=10, **kwargs):
+def generalization_score_nmf_kl(train, test, n_components=10, **kwargs):
   import sklearn.decomposition
   m = sklearn.decomposition.NMF(n_components=n_components, solver='mu', beta_loss=1).fit(train)
   return pois_llik(m.transform(train).dot(m.components_), train, test)
