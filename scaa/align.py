@@ -1,32 +1,41 @@
+import scipy.sparse as ss
 import scaa
 import torch
 
-from .modules import *
-
-def align(x1, x2, latent_dim, max_epochs=5, **kwargs):
+def align(counts, labels, latent_dim, batch_size=100, max_epochs=2, n_iters=10, verbose=False):
   """Align the datasets x1 and x2
 
-  :param x1: torch.utils.data.TensorDataset
-  :param x2: torch.utils.data.TensorDataset
-  :param latent_dim: 
+  :param x1: Matrix of counts (ndarray-like)
+  :param x2: Matrix of counts (ndarray-like)
+  :param latent_dim: Latent dimension of the embedding
 
   """
-  raise NotImplementedError
-  n1, p1 = x1.shape
-  n2, p2 = x2.shape
-  assert p1 == p2
-
-  y = np.zeros(n1 + n2)
-  y[n1:] = 1
-  encoder = Encoder(p1, latent_dim)
-  decoder = ZIP(latent_dim, p1)
-  adversary = BinaryDisciminator(latent_dim)
-
-  for epoch in range(max_epochs):
-    for batches in zip(torch.utils.data.DataLoader(x1, **kwargs), torch.utils.data.DataLoader(x2, **kwargs)):
-      # [2 * batch_size, stoch_samples]
-      qz = encoder.forward(torch.cat(*batches))
-      # [2 * batch_size, p1]
-      px = decoder.forward(qz)
-      # [2 * batch_size, 1]
-      py = adversary.forward(torch.mean(qz))
+  training_data = torch.utils.data.DataLoader(
+    scaa.dataset.SparseDataset(counts),
+    batch_size=batch_size,
+    num_workers=3,
+    pin_memory=True,
+    shuffle=True,
+  )
+  batch_data = torch.utils.data.DataLoader(
+    torch.tensor(labels, dtype=torch.long),
+    batch_size=batch_size,
+    num_workers=3,
+    pin_memory=True,
+    shuffle=True,
+  )
+  eval_data = torch.utils.data.DataLoader(
+    scaa.dataset.SparseDataset(counts),
+    batch_size=batch_size,
+    num_workers=3,
+    pin_memory=True,
+    shuffle=False,
+  )
+  # Fit the model
+  with torch.cuda.device(0):
+    model = scaa.modules.ZIPAAE(input_dim=counts.shape[1], latent_dim=latent_dim, num_classes=2).fit(x=training_data, y=batch_data, max_epochs=max_epochs, n_iters=n_iters, verbose=verbose)
+  return
+  # Recover the embedding
+  with torch.set_grad_enabled(False):
+    z = torch.cat([model.vae.forward(batch)[0] for batch in eval_data]).cpu().numpy()
+  return z

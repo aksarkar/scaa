@@ -26,16 +26,18 @@ def test_zipvae(simulate):
   n, p = x.shape
   latent_dim = 10
   x = torch.utils.data.DataLoader(torch.tensor(x, dtype=torch.float), batch_size=n)
-  model = scaa.modules.ZIPVAE(p, latent_dim)
-  model.fit(x, lr=1e-2, verbose=True, max_epochs=1)
+  with torch.set_grad_enabled(True):
+    model = scaa.modules.ZIPVAE(p, latent_dim)
+    model.fit(x, lr=1e-2, verbose=True, max_epochs=1)
 
 def test_zipvae_denoise(simulate):
   x, eta = simulate
   n, p = x.shape
   latent_dim = 10
   x = torch.utils.data.DataLoader(torch.tensor(x, dtype=torch.float), batch_size=n)
-  model = scaa.modules.ZIPVAE(p, latent_dim).fit(x, lr=1e-3, max_epochs=10, verbose=True)
-  lam = model.denoise(x)
+  with torch.set_grad_enabled(True):
+    model = scaa.modules.ZIPVAE(p, latent_dim).fit(x, lr=1e-3, max_epochs=10, verbose=True)
+    lam = model.denoise(x)
   assert isinstance(lam, np.ndarray)
   assert lam.shape == (n, p)
   assert (lam > 0).all()
@@ -54,5 +56,6 @@ def test_zipaae(simulate):
   latent_dim = 10
   x = torch.utils.data.DataLoader(torch.tensor(x, dtype=torch.float), batch_size=n)
   y = torch.utils.data.DataLoader(torch.tensor(y, dtype=torch.long), batch_size=n)
-  model = scaa.modules.ZIPAAE(p, latent_dim, 2)
-  model.fit(x, y, lr=1e-2, verbose=True, max_epochs=1)
+  with torch.set_grad_enabled(True):
+    model = scaa.modules.ZIPAAE(p, latent_dim, 2)
+    model.fit(x, y, lr=1e-2, verbose=True, max_epochs=1)

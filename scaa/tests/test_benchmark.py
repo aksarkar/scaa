@@ -34,7 +34,7 @@ def test_training_score_nmf(simulate):
   res = scaa.benchmark.training_score_nmf(x, rank=10)
   assert res <= 0
 
-def test_training_score_nmf(simulate):
+def test_training_score_nmf_kl(simulate):
   x, eta = simulate
   res = scaa.benchmark.training_score_nmf_kl(x, rank=10)
   assert res <= 0
@@ -66,7 +66,10 @@ def test_training_score_maptpx(simulate):
 
 def test_training_score_hpf(simulate):
   x, eta = simulate
-  res = scaa.benchmark.training_score_hpf(x)
+  try:
+    res = scaa.benchmark.training_score_hpf(x)
+  except ImportError:
+    pytest.skip('tensorflow import failed')
   assert res <= 0
 
 def test_training_score_scvi(simulate):
@@ -74,11 +77,13 @@ def test_training_score_scvi(simulate):
   res = scaa.benchmark.training_score_scvi(x)
   assert res <= 0
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='torch reports cuda not available')
 def test_training_score_zipvae(simulate):
   x, eta = simulate
   res = scaa.benchmark.training_score_zipvae(x)
   assert res <= 0
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason='torch reports cuda not available')
 def test_evaluate_training():
   res = scaa.benchmark.evaluate_training(num_trials=1)
   assert res.shape == (1, 6)
@@ -197,10 +202,12 @@ def test_generalization_score_grad(simulate_train_test):
   assert np.isfinite(res)
   assert res < 0
 
-# @pytest.mark.skip(reason='CUDA version incompatability')
 def test_generalization_score_hpf(simulate_train_test):
   train, test, eta = simulate_train_test
-  res = scaa.benchmark.generalization_score_hpf(train, test)
+  try:
+    res = scaa.benchmark.generalization_score_hpf(train, test)
+  except ImportError:
+    pytest.skip('tensorflow import failed')
   assert np.isfinite(res)
   assert res < 0
 
@@ -235,5 +242,11 @@ def test_generalization_score_zipaae(simulate_train_test):
 def test_generalization_score_lda(simulate_train_test):
   train, test, eta = simulate_train_test
   res = scaa.benchmark.generalization_score_lda(train, test)
+  assert np.isfinite(res)
+  assert res < 0
+
+def test_generalization_score_maptpx(simulate_train_test):
+  train, test, eta = simulate_train_test
+  res = scaa.benchmark.generalization_score_maptpx(train, test)
   assert np.isfinite(res)
   assert res < 0

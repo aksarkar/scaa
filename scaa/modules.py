@@ -18,10 +18,8 @@ class Encoder(torch.nn.Module):
     self.scale = torch.nn.Sequential(torch.nn.Linear(128, output_dim), torch.nn.Softplus())
 
   def forward(self, x):
-    # scVI does not play nicely
-    with torch.set_grad_enabled(True):
-      q = self.net(x)
-      return self.mean(q), self.scale(q)
+    q = self.net(x)
+    return self.mean(q), self.scale(q)
 
 class ZIP(torch.nn.Module):
   """Decoder p(x | z) = pi(z) delta0(.) + (1 - pi(z)) Poisson(lambda(z))
@@ -72,10 +70,16 @@ class ZIPVAE(torch.nn.Module):
     :param x: torch.utils.data.DataLoader
 
     """
+    if torch.cuda.is_available():
+      # Move the model to the GPU
+      self.cuda()
     stoch_samples = torch.Size([stoch_samples])
     opt = torch.optim.Adam(self.parameters(), **kwargs)
     for epoch in range(max_epochs):
       for i, batch in enumerate(x):
+        if torch.cuda.is_available():
+          # Move the minibatch to the GPU
+          batch = batch.cuda()
         opt.zero_grad()
         loss = self.loss(batch, stoch_samples)
         loss.backward()
@@ -83,6 +87,11 @@ class ZIPVAE(torch.nn.Module):
         if verbose and not i % 10:
           print(f'[epoch={epoch} batch={i}] elbo={-loss}')
     return self
+
+  @torch.no_grad()
+  def transform(self, x):
+    q = self.encoder.cpu()
+    return torch.cat([q.forward(batch)[0] for batch in x]).numpy()
 
   @torch.no_grad()
   def denoise(self, x):
@@ -93,16 +102,19 @@ class Discriminator(torch.nn.Module):
   def __init__(self, input_dim, num_classes):
     super().__init__()
     self.net = torch.nn.Sequential(
-      torch.nn.Linear(input_dim, input_dim),
+      torch.nn.Linear(input_dim, 128),
       torch.nn.ReLU(),
-      torch.nn.Linear(input_dim, input_dim),
+      torch.nn.Linear(128, 128),
       torch.nn.ReLU(),
-      torch.nn.Linear(input_dim, num_classes),
-      torch.nn.LogSoftmax(dim=1),
+      torch.nn.Linear(128, num_classes),
     )
+    self.loss_fn = torch.nn.CrossEntropyLoss()
 
   def forward(self, x):
     return self.net(x)
+
+  def loss(self, x, y):
+    return self.loss_fn(self.forward(x), y)
 
 class ZIPAAE(torch.nn.Module):
   def __init__(self, input_dim, latent_dim, num_classes):
@@ -110,13 +122,16 @@ class ZIPAAE(torch.nn.Module):
     self.vae = ZIPVAE(input_dim, latent_dim)
     self.adv = Discriminator(latent_dim, num_classes)
 
-  def fit(self, x, y, max_epochs, verbose=False, stoch_samples=10, **kwargs):
+  def fit(self, x, y, max_epochs, verbose=False, stoch_samples=10, n_iters=10, **kwargs):
     """Fit the model
 
     :x: torch.utils.data.DataLoader
     :y: torch.utils.data.DataLoader
 
     """
+    if torch.cuda.is_available():
+      # Move the model to the GPU
+      self.cuda()
     stoch_samples = torch.Size([stoch_samples])
     # Reconstruction
     opt0 = torch.optim.Adam(self.vae.parameters(), **kwargs)
@@ -126,27 +141,43 @@ class ZIPAAE(torch.nn.Module):
     opt2 = torch.optim.Adam(self.vae.encoder.parameters(), **kwargs)
     for epoch in range(max_epochs):
       for i, (batch_x, batch_y) in enumerate(zip(x, y)):
-        opt0.zero_grad()
-        loss0 = self.vae.loss(batch_x, stoch_samples)
-        loss0.backward()
-        opt0.step()
+        if torch.cuda.is_available():
+          # Move the minibatch to the GPU
+          batch_x = batch_x.cuda()
+          batch_y = batch_y.cuda()
 
-        f = torch.nn.functional.cross_entropy
+        for j in range(n_iters):
+          opt0.zero_grad()
+          with torch.autograd.detect_anomaly():
+            loss0 = self.vae.loss(batch_x, stoch_samples)
+            loss1 = self.adv.loss(self.vae.encoder.forward(batch_x)[0], batch_y)
+            loss0.backward()
+          opt0.step()
+
+        if verbose:
+          print(f'Reconstruction [epoch={epoch} batch={i}] vae={loss0} adv={loss1} gen={-loss1}')
 
         # Fix the generator, train the adversary
-        opt1.zero_grad()
-        loss1 = f(self.adv.forward(self.vae.encoder.forward(batch_x)[0]), batch_y)
-        loss1.backward()
-        opt1.step()
+        for j in range(2 * n_iters):
+          opt1.zero_grad()
+          loss0 = self.vae.loss(batch_x, stoch_samples)
+          loss1 = self.adv.loss(self.vae.encoder.forward(batch_x)[0], batch_y)
+          loss1.backward()
+          opt1.step()
 
-        # Fix the adversary, train the generator
-        opt2.zero_grad()
-        loss2 = -f(self.adv.forward(self.vae.encoder.forward(batch_x)[0]), batch_y)
-        loss2.backward()
-        opt2.step()
+        if verbose:
+          print(f'Adversary [epoch={epoch} batch={i}] vae={loss0} adv={loss1} gen={-loss1}')
 
-        if verbose and not i % 10:
-          print(f'[epoch={epoch} batch={i}] vae={loss0} adv={loss1} gen={loss2}')
+        # Fix the generator, train the adversary
+        for j in range(n_iters):
+          opt2.zero_grad()
+          loss0 = self.vae.loss(batch_x, stoch_samples)
+          loss2 = -self.adv.loss(self.vae.encoder.forward(batch_x)[0], batch_y)
+          loss2.backward()
+          opt2.step()
+
+        if verbose:
+          print(f'Generator [epoch={epoch} batch={i}] vae={loss0} adv={-loss2} gen={loss2}')
     return self
 
   def denoise(self, x):

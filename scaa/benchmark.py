@@ -47,7 +47,7 @@ def training_score_plra(x, rank):
 def training_score_plra1(x, rank=10):
   import wlra
   lam = np.exp(wlra.plra(x, rank=rank))
-  return st.poisson(mu=np.exp(lam)).logpmf(x).sum()
+  return st.poisson(mu=lam).logpmf(x).sum()
 
 def training_score_lda(x, rank=10, learning_method='online', batch_size=100, **kwargs):
   import sklearn.decomposition
@@ -68,10 +68,13 @@ def training_score_maptpx(x, rank=10, **kwargs):
   return st.poisson(mu=x.sum(axis=1, keepdims=True) * L.dot(F.T)).logpmf(x).sum()
 
 def training_score_hpf(x, rank=50, **kwargs):
+  try:
+    import tensorflow as tf
+  except ImportError:
+    return np.nan
   import scHPF.preprocessing
   import scHPF.train
   import tempfile
-  import tensorflow as tf
   with tempfile.TemporaryDirectory(prefix='/scratch/midway2/aksarkar/ideas/') as d:
     tf.reset_default_graph()
     # scHPF assumes genes x cells
@@ -103,9 +106,11 @@ def training_score_scvi(train, **kwargs):
                    m.test_set.sequential().imputation()])
   return st.poisson(mu=lam).logpmf(train).sum()
 
-def training_score_zipvae(train, lr=1e-2, max_epochs=10, **kwargs):
+def training_score_zipvae(train, lr=1e-2, max_epochs=100, **kwargs):
   import scaa
   import torch
+  if not torch.cuda.is_available():
+    return np.nan
   # scVI does not play nicely
   with torch.autograd.set_grad_enabled(True):
     training_data = get_data_loader(train, **kwargs)
@@ -235,10 +240,13 @@ def generalization_score_grad(train, test, rank=10, **kwargs):
     return pois_llik(lam, train, test)
 
 def generalization_score_hpf(train, test, rank=50, **kwargs):
+  try:
+    import tensorflow as tf
+  except:
+    return np.nan
   import scHPF.preprocessing
   import scHPF.train
   import tempfile
-  import tensorflow as tf
   with tempfile.TemporaryDirectory(prefix='/scratch/midway2/aksarkar/ideas/') as d:
     tf.reset_default_graph()
     # scHPF assumes genes x cells
@@ -289,9 +297,11 @@ def get_data_loader(x, dtype=torch.float, batch_size=25, shuffle=False, **kwargs
     x = torch.tensor(x, dtype=dtype)
   return torch.utils.data.DataLoader(x, batch_size=batch_size, shuffle=shuffle)
 
-def generalization_score_zipvae(train, test, lr=1e-2, max_epochs=10, **kwargs):
+def generalization_score_zipvae(train, test, lr=1e-2, max_epochs=100, **kwargs):
   import scaa
   import torch
+  if not torch.cuda.is_available():
+    return np.nan
   # scVI does not play nicely
   with torch.autograd.set_grad_enabled(True):
     training_data = get_data_loader(train, **kwargs)
@@ -304,6 +314,8 @@ def generalization_score_zipaae(train, test, y, lr=1e-2, max_epochs=10, **kwargs
   import scaa
   import torch
   import torch.utils.data
+  if not torch.cuda.is_available():
+    return np.nan
   # scVI does not play nicely
   with torch.autograd.set_grad_enabled(True):
     training_data = get_data_loader(train, **kwargs)
@@ -321,7 +333,7 @@ def generalization_score_lda(train, test, n_components=10, learning_method='onli
   lam = (L / L.sum(axis=0)).dot(F)
   return pois_llik(lam, train, test)
 
-def generalization_score_maptpx(train, test, rank, **kwargs):
+def generalization_score_maptpx(train, test, rank=10, **kwargs):
   import rpy2.robjects.packages
   import rpy2.robjects.numpy2ri
   rpy2.robjects.numpy2ri.activate()
